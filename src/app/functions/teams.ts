@@ -105,6 +105,110 @@ export const addTeam = async ({
   return [teamData] as Team[];
 };
 
+export const copyTeamsFromPreviousYear = async ({
+  sourceYear,
+  targetYear,
+}: {
+  sourceYear: string;
+  targetYear: string;
+}) => {
+  const supabase = createClient();
+
+  // Keep this guard in the data layer as well as the UI so a second tab or
+  // concurrent request cannot accidentally duplicate the target year's teams.
+  const { data: existingTargetTeams, error: targetTeamsError } = await supabase
+    .from("teams")
+    .select("id")
+    .eq("year", targetYear)
+    .limit(1);
+
+  if (targetTeamsError) {
+    throw new Error(targetTeamsError.message);
+  }
+
+  if (existingTargetTeams.length > 0) {
+    throw new Error(`Teams already exist for ${targetYear}.`);
+  }
+
+  const { data: sourceTeams, error: sourceTeamsError } = await supabase
+    .from("teams")
+    .select(`
+      sport,
+      sport_id,
+      gender,
+      grade,
+      points,
+      season,
+      team_coaches2 (coach)
+    `)
+    .eq("year", sourceYear);
+
+  if (sourceTeamsError) {
+    throw new Error(sourceTeamsError.message);
+  }
+
+  if (!sourceTeams || sourceTeams.length === 0) {
+    throw new Error(`No teams were found for ${sourceYear}.`);
+  }
+
+  const createdTeamIds: number[] = [];
+
+  try {
+    for (const sourceTeam of sourceTeams) {
+      const { data: newTeam, error: teamError } = await supabase
+        .from("teams")
+        .insert({
+          sport: sourceTeam.sport,
+          sport_id: sourceTeam.sport_id,
+          gender: sourceTeam.gender,
+          grade: sourceTeam.grade,
+          points: sourceTeam.points,
+          season: sourceTeam.season,
+          year: targetYear,
+          seasonHighlights: null,
+          yearbookMessage: null,
+        })
+        .select("id")
+        .single();
+
+      if (teamError || !newTeam) {
+        throw new Error(teamError?.message ?? "Failed to create a copied team.");
+      }
+
+      createdTeamIds.push(newTeam.id);
+
+      const coaches = (sourceTeam.team_coaches2 ?? [])
+        .map((teamCoach: { coach: string }) => teamCoach.coach?.trim())
+        .filter((coach: string | undefined): coach is string => Boolean(coach));
+
+      if (coaches.length > 0) {
+        const { error: coachesError } = await supabase
+          .from("team_coaches2")
+          .insert(
+            Array.from(new Set(coaches)).map((coach) => ({
+              team_id: newTeam.id,
+              coach,
+            }))
+          );
+
+        if (coachesError) {
+          throw new Error(coachesError.message);
+        }
+      }
+    }
+  } catch (error) {
+    // Avoid leaving a partially copied year if any team or coach insert fails.
+    if (createdTeamIds.length > 0) {
+      await supabase.from("teams").delete().in("id", createdTeamIds);
+    }
+    throw error instanceof Error
+      ? error
+      : new Error("Failed to copy teams from the previous year.");
+  }
+
+  return createdTeamIds;
+};
+
 export const updateTeam = async ({
   id,
   sport_id,

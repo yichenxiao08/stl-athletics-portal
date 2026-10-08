@@ -3,7 +3,14 @@ import Navigation from "@/components/navbar";
 import * as z from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { addPlayer } from "@/app/functions/students";
+import * as XLSX from "xlsx";
+import {
+  addPlayer,
+  importStudents,
+  isStudentActiveForSchoolYear,
+  selectData,
+} from "@/app/functions/students";
+import type { StudentSpreadsheetRow } from "@/app/functions/students";
 import {
   Form,
   FormControl,
@@ -19,8 +26,7 @@ import {
 } from "@/components/ui/popover";
 import { Student, createColumns } from "./columns";
 import { DataTable } from "./data-table";
-import { selectData } from "@/app/functions/students";
-import { useState, useEffect } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Filter, Plus, Loader2 } from "lucide-react";
@@ -39,6 +45,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useSchoolYear } from "@/lib/school-year-context";
 
 const formSchema = z.object({
   name: z.string().min(1, "Name must be at least 1 character."),
@@ -51,13 +58,147 @@ const formSchema = z.object({
     .max(12, "Grade must be at most 12."),
 });
 
+const normalizeHeader = (header: string) =>
+  header.trim().toLowerCase().replace(/\s+/g, " ");
+
+const spreadsheetLayouts = [
+  {
+    headers: ["first name", "last name", "grade", "gender", "email"],
+    firstName: "first name",
+    lastName: "last name",
+    grade: "grade",
+    preferredName: undefined,
+    gender: "gender",
+    email: "email",
+  },
+  {
+    headers: ["given name", "usual name", "surname", "gender", "gafeuser"],
+    firstName: "given name",
+    preferredName: "usual name",
+    lastName: "surname",
+    grade: undefined,
+    gender: "gender",
+    email: "gafeuser",
+  },
+];
+
+const validNamePattern = /^[\p{L}][\p{L} .'-]*$/u;
+
+const parseStudentSpreadsheet = async (
+  file: File
+): Promise<StudentSpreadsheetRow[]> => {
+  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    throw new Error("Only .xlsx files are accepted.");
+  }
+
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) {
+    throw new Error("The spreadsheet does not contain a worksheet.");
+  }
+
+  const worksheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
+    defval: "",
+    raw: false,
+  });
+  if (rows.length === 0) {
+    throw new Error("The spreadsheet does not contain any student rows.");
+  }
+
+  const rawHeaders = Object.keys(rows[0]);
+  const normalizedHeaders = rawHeaders.map(normalizeHeader);
+  const duplicateHeaders = normalizedHeaders.filter(
+    (header, index) => normalizedHeaders.indexOf(header) !== index
+  );
+  if (duplicateHeaders.length > 0) {
+    throw new Error(
+      `Duplicate columns are not allowed: ${[...new Set(duplicateHeaders)].join(", ")}.`
+    );
+  }
+  const layout = spreadsheetLayouts.find(
+    (candidate) =>
+      candidate.headers.length === normalizedHeaders.length &&
+      candidate.headers.every((header) => normalizedHeaders.includes(header))
+  );
+  if (!layout) {
+    throw new Error(
+      "The spreadsheet columns are invalid. Use either First Name, Last Name, Grade, Gender, Email or Given name, Usual name, Surname, Gender, GAFEUser."
+    );
+  }
+
+  const headers = new Map(
+    rawHeaders.map((header) => [normalizeHeader(header), header])
+  );
+
+  const getCell = (row: Record<string, unknown>, header: string) =>
+    String(row[headers.get(header) ?? ""] ?? "").trim();
+
+  return rows.map((row, index) => {
+    const firstName = getCell(row, layout.firstName);
+    const preferredName = layout.preferredName
+      ? getCell(row, layout.preferredName)
+      : "";
+    const lastName = getCell(row, layout.lastName);
+    const email = getCell(row, layout.email);
+    const gender = getCell(row, layout.gender);
+    const gradeText = layout.grade ? getCell(row, layout.grade) : "";
+    const parsedGrade = gradeText ? Number(gradeText) : undefined;
+
+    if (!firstName || !lastName || !gender || !email) {
+      throw new Error(`Row ${index + 2} is missing a required value.`);
+    }
+    if (
+      !validNamePattern.test(firstName) ||
+      (preferredName && !validNamePattern.test(preferredName)) ||
+      !validNamePattern.test(lastName)
+    ) {
+      throw new Error(`Row ${index + 2} has an invalid first or last name.`);
+    }
+    if (layout.grade) {
+      if (
+        parsedGrade === undefined ||
+        !Number.isInteger(parsedGrade) ||
+        parsedGrade < 9 ||
+        parsedGrade > 12
+      ) {
+        throw new Error(`Row ${index + 2} has an invalid grade: ${gradeText}.`);
+      }
+    }
+    if (!/^(male|female)$/i.test(gender)) {
+      throw new Error(
+        `Row ${index + 2} has an invalid gender: ${gender}. Use Male or Female.`
+      );
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new Error(`Row ${index + 2} has an invalid email: ${email}.`);
+    }
+
+    return {
+      firstName: preferredName || firstName,
+      lastName,
+      grade: parsedGrade,
+      gender,
+      email,
+    };
+  });
+};
+
 export default function Students() {
+  const { selectedYear } = useSchoolYear();
   const [data, setData] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
-  const [isAddByCSVOpen, setIsAddByCSVOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [isAddByManualOpen, setIsAddByManualOpen] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [selectedFileName, setSelectedFileName] = useState("");
+  const [selectedSpreadsheetFile, setSelectedSpreadsheetFile] =
+    useState<File | null>(null);
+  const spreadsheetInputRef = useRef<HTMLInputElement>(null);
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -124,6 +265,55 @@ export default function Students() {
       setIsAdding(false);
     }
   };
+  const handleSpreadsheetSelection = (
+    event: ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      setSelectedFileName("");
+      setSelectedSpreadsheetFile(null);
+      return;
+    }
+
+    setSelectedFileName(file.name);
+    setSelectedSpreadsheetFile(file);
+    setImportError(null);
+    setImportSuccess(null);
+  };
+
+  const handleSpreadsheetUpload = async () => {
+    const file = selectedSpreadsheetFile;
+    if (!file) return;
+
+    setImportError(null);
+    setImportSuccess(null);
+    setIsImporting(true);
+    try {
+      const rows = await parseStudentSpreadsheet(file);
+      const result = await importStudents(rows, selectedYear);
+      const refreshedStudents = await selectData();
+      if (refreshedStudents) {
+        setData(refreshedStudents);
+      }
+      setImportSuccess(
+        `Imported ${rows.length} rows: ${result.inserted} added and ${result.updated} updated.`
+      );
+      window.setTimeout(() => setIsImportOpen(false), 1500);
+    } catch (error) {
+      setImportError(
+        error instanceof Error
+          ? error.message
+          : "Failed to import the student spreadsheet."
+      );
+    } finally {
+      setIsImporting(false);
+      if (spreadsheetInputRef.current) {
+        spreadsheetInputRef.current.value = "";
+      }
+      setSelectedFileName("");
+      setSelectedSpreadsheetFile(null);
+    }
+  };
   const clearFilters = () => {
     setGradeFilters({
       nine: false,
@@ -172,7 +362,9 @@ export default function Students() {
       selectedGrades.length === 0 || selectedGrades.includes(student.grade);
 
     // Filter by graduation status (active students vs graduated)
-    const graduationMatch = includeGraduated || student.active;
+    const graduationMatch =
+      includeGraduated ||
+      isStudentActiveForSchoolYear(student.grad, selectedYear);
 
     return nameMatch && gradeMatch && graduationMatch;
   });
@@ -281,8 +473,8 @@ export default function Students() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="">
-              <DropdownMenuItem onClick={() => setIsAddByCSVOpen(true)}>
-                Add by CSV
+              <DropdownMenuItem onClick={() => setIsImportOpen(true)}>
+                Upload XLSX
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setIsAddByManualOpen(true)}>
                 Add by Manual Entry
@@ -290,17 +482,86 @@ export default function Students() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <Dialog open={isAddByCSVOpen} onOpenChange={setIsAddByCSVOpen}>
+        <Dialog
+          open={isImportOpen}
+          onOpenChange={(open) => {
+            setIsImportOpen(open);
+            if (!open) {
+              setImportError(null);
+              setImportSuccess(null);
+              setSelectedFileName("");
+              setSelectedSpreadsheetFile(null);
+            }
+          }}
+        >
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Add by CSV</DialogTitle>
+              <DialogTitle>Upload student spreadsheet</DialogTitle>
               <DialogDescription>
-                Upload a CSV file to add students. The file should have the
-                following columns:
+                Upload an .xlsx file with one of these column layouts in the
+                first worksheet:
                 <br />
-                Name, Email, Grade
+                First Name, Last Name, Grade, Gender, Email
+                <br />
+                or
+                <br />
+                Given name, Usual name, Surname, Gender, GAFEUser.
               </DialogDescription>
             </DialogHeader>
+            <div>
+              <Input
+                id="student-spreadsheet-upload"
+                ref={spreadsheetInputRef}
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={handleSpreadsheetSelection}
+                disabled={isImporting}
+                className="sr-only"
+              />
+              <label
+                htmlFor="student-spreadsheet-upload"
+                className={`flex h-9 w-full items-center rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors ${
+                  isImporting
+                    ? "cursor-not-allowed opacity-50"
+                    : "cursor-pointer hover:bg-accent"
+                }`}
+              >
+                <span className="font-medium">Choose file </span>
+                <span
+                  className={`ml-2 truncate ${
+                    selectedFileName
+                      ? "text-foreground"
+                      : "text-muted-foreground/60"
+                  }`}
+                >
+                  {selectedFileName || "No file selected"}
+                </span>
+              </label>
+            </div>
+            {selectedSpreadsheetFile && (
+              <div className="flex justify-start">
+                <Button
+                  type="button"
+                  onClick={handleSpreadsheetUpload}
+                  disabled={isImporting}
+                >
+                  {isImporting ? "Uploading..." : "Confirm upload"}
+                </Button>
+              </div>
+            )}
+            <p className="text-sm text-muted-foreground">
+              Importing for school year {selectedYear}. Existing students are
+              matched by name and email; their grade and gender are updated.
+            </p>
+            {isImporting && (
+              <p className="text-sm text-muted-foreground">Importing...</p>
+            )}
+            {importError && (
+              <p className="text-sm text-destructive">{importError}</p>
+            )}
+            {importSuccess && (
+              <p className="text-sm text-green-600">{importSuccess}</p>
+            )}
           </DialogContent>
         </Dialog>
         <Dialog open={isAddByManualOpen} onOpenChange={setIsAddByManualOpen}>
