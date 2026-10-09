@@ -1,5 +1,32 @@
 import { createClient } from "@/lib/supabase/client";
-import { PreviousWinner } from "../points/previous-winners/columns";
+
+export type AwardWinnerEntry = {
+  id: number;
+  award: string;
+  year: number;
+};
+
+export async function saveAwardWinners(entries: AwardWinnerEntry[]) {
+  if (entries.length === 0) {
+    return 0;
+  }
+
+  const uniqueEntries = Array.from(
+    new Map(entries.map((entry) => [entry.id, entry])).values()
+  );
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("award_winners")
+    .upsert(uniqueEntries, { onConflict: "id" })
+    .select("id");
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data?.length ?? uniqueEntries.length;
+}
+
 export async function selectPreviousWinners(){
   const supabase = createClient();
   const { data, error } = await supabase

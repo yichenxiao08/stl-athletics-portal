@@ -4,18 +4,30 @@ import { DataTable } from "./data-table";
 import { columns, PlayerWithPoints } from "./columns";
 import { PreviousWinner } from "./previous-winners/columns";
 import { useEffect, useState } from "react";
-import { selectData } from "../functions/students";
-import { selectPreviousWinners, addWinner, updateWinner } from "../functions/awards";
+import {
+  isStudentActiveForSchoolYear,
+  selectData,
+} from "../functions/students";
+import {
+  selectPreviousWinners,
+  saveAwardWinners,
+} from "../functions/awards";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useSchoolYear } from "@/lib/school-year-context";
 export default function Points() {
+  const { selectedYear } = useSchoolYear();
   const [data, setData] = useState<PlayerWithPoints[]>();
   const [prevWinners, setPrevWinners] = useState<PreviousWinner[]>();
   const [filter, setFilter] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   useEffect(() => {
     const getPoints = async () => {
+      setLoading(true);
       try {
         const [data, prevData] = await Promise.all([
           selectData(),
@@ -23,7 +35,11 @@ export default function Points() {
         ]);
         setData(
           data
-            ?.filter((student) => student.points > 0)
+            ?.filter(
+              (student) =>
+                student.points > 0 &&
+                isStudentActiveForSchoolYear(student.grad, selectedYear)
+            )
             .map((student) => ({
               student_id: student.id,
               name: student.name,
@@ -49,7 +65,7 @@ export default function Points() {
       }
     };
     getPoints();
-  }, []);
+  }, [selectedYear]);
 
   const filteredData = data?.filter((student) => {
     // Filter by name - check both "Last, First" and "First Last" formats
@@ -71,90 +87,72 @@ export default function Points() {
     return nameMatch;
   });
 
-  async function updateRecipients() {
-    const recipients = data?.filter((student) => student.points >= 60);
-    
-    // Process all recipients sequentially
-    const promises = recipients?.map(async (student) => {
-      const prevWinner = prevWinners?.find(
-        (winner) => winner.student_id === student.student_id
-      );
-      const prevOutstandingWinner = prevWinners?.find(
-        (winner) =>
-          winner.student_id === student.student_id &&
-          winner.award === "Outstanding Contribution"
-      );
-      if (
-        !prevOutstandingWinner &&
-        student.points >= 100 &&
-        student.grade === 12 &&
-        student
-      ) {
-        if(prevWinner){
-          await updateWinner({id: student.student_id, award: "Outstanding Contribution", year: new Date().getFullYear()});
-        } else {
-          await addWinner({
+  const getCurrentAwardEntries = () => {
+    const year = Number(selectedYear.slice(0, 4));
+
+    return (data ?? []).flatMap((student) => {
+      if (student.points >= 100 && student.grade === 12) {
+        return [
+          {
             id: student.student_id,
             award: "Outstanding Contribution",
-            year: new Date().getFullYear(),
-          });
-        }
+            year,
+          },
+        ];
       }
-      const prevDistinctionWinner = prevWinners?.find(
-        (winner) =>
-          winner.student_id === student.student_id &&
-          winner.award === "Letter of Distinction"
-      );
-      if (
-        !prevDistinctionWinner &&
-        student.points >= 90 &&
-        (student.points < 100 || student.grade !== 12)
-      ) {
-        if (prevWinner) {
-          await updateWinner({
+      if (student.points >= 90) {
+        return [
+          {
             id: student.student_id,
             award: "Letter of Distinction",
-            year: new Date().getFullYear(),
-          });
-        } else {
-          await addWinner({
+            year,
+          },
+        ];
+      }
+      if (student.points >= 70) {
+        return [
+          {
             id: student.student_id,
-            award: "Letter of Distinction",
-            year: new Date().getFullYear(),
-          });
-        }
+            award: "Letter of Merit",
+            year,
+          },
+        ];
       }
-      const prevMeritWinner = prevWinners?.find(
-        (winner) =>
-          winner.student_id === student.student_id &&
-          winner.award === "Letter of Merit"
+      return [];
+    });
+  };
+
+  const saveCurrentEntries = async () => {
+    setSaveError(null);
+    setSaveMessage(null);
+    setIsSaving(true);
+    try {
+      const entries = getCurrentAwardEntries();
+      const savedCount = await saveAwardWinners(entries);
+      setSaveMessage(`Saved ${savedCount} current award entries.`);
+
+      const prevData = await selectPreviousWinners();
+      setPrevWinners(
+        prevData
+          ?.filter((winner) => winner.student_points?.points > 0)
+          .map((winner) => ({
+            student_id: winner.id,
+            name: winner.student_points?.name || "",
+            points: winner.student_points?.points || 0,
+            year: winner.year,
+            award: winner.award,
+          }))
       );
-      if (!prevMeritWinner && student.points >= 60 && student.points < 90) {
-        await addWinner({
-          id: student.student_id,
-          award: "Letter of Merit",
-          year: new Date().getFullYear(),
-        });
-      }
-    }) || [];
-    
-    // Wait for all updates to complete
-    await Promise.all(promises);
-    
-    // Refetch the complete list of previous winners
-    const prevData = await selectPreviousWinners();
-    setPrevWinners(
-      prevData
-        ?.filter((winner) => winner.student_points?.points > 0)
-        .map((winner) => ({
-          student_id: winner.id,
-          name: winner.student_points?.name || "",
-          points: winner.student_points?.points || 0,
-          year: winner.year,
-          award: winner.award,
-        }))
-    );
-  }
+    } catch (error) {
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : "Failed to save current award entries."
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const copyWinners = async () => {
     const outstandingAchievement = (data ?? [])
@@ -198,9 +196,24 @@ export default function Points() {
               <Button variant="outline" size="sm" onClick={() => void copyWinners()}>
                 Copy Winners
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void saveCurrentEntries()}
+                disabled={isSaving || loading || !data?.length}
+                className="hidden"
+              >
+                {isSaving ? "Saving..." : "Save Award Entries"}
+              </Button>
             </div>
             {fetchError && (
               <p className="text-sm text-destructive">{fetchError}</p>
+            )}
+            {saveError && (
+              <p className="text-sm text-destructive">{saveError}</p>
+            )}
+            {saveMessage && (
+              <p className="text-sm text-green-600">{saveMessage}</p>
             )}
                   <div>
                     <div className="font-semibold text-2xl mb-1 mt-3">

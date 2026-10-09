@@ -87,7 +87,7 @@ export const importStudents = async (
   const matchedStudentIds = new Set<number>();
   const updates: {
     id: number;
-    values: { grade?: number; gender?: string; active?: boolean; point_offset: number };
+    values: { grade?: number; gender?: string; active?: boolean };
   }[] = [];
   const inserts: {
     name: string;
@@ -102,7 +102,7 @@ export const importStudents = async (
 
   const updateStudent = async (
     id: number,
-    values: { grade?: number; gender?: string; active?: boolean; point_offset: number }
+    values: { grade?: number; gender?: string; active?: boolean }
   ) => {
     const { error } = await supabase.from("students").update(values).eq("id", id);
     if (error) {
@@ -154,12 +154,11 @@ export const importStudents = async (
       if (
         existingStudent.grade !== grade ||
         existingStudent.gender !== row.gender ||
-        existingStudent.active !== active ||
-        existingStudent.point_offset !== 0
+        existingStudent.active !== active
       ) {
         updates.push({
           id: existingStudent.id,
-          values: { grade, gender: row.gender, active, point_offset: 0 },
+          values: { grade, gender: row.gender, active },
         });
         updatedCount += 1;
       }
@@ -185,9 +184,9 @@ export const importStudents = async (
     );
     if (
       !matchedStudentIds.has(student.id) &&
-      (student.active !== active || student.point_offset !== 0)
+      student.active !== active
     ) {
-      updates.push({ id: student.id, values: { active, point_offset: 0 } });
+      updates.push({ id: student.id, values: { active } });
       updatedCount += 1;
     }
   }

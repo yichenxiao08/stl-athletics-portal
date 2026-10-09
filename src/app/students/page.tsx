@@ -83,6 +83,7 @@ const spreadsheetLayouts = [
 ];
 
 const validNamePattern = /^[\p{L}][\p{L} .'-]*$/u;
+const validGenderPattern = /^(male|female|prefer\s+not\s+to\s+disclose)$/i;
 
 const parseStudentSpreadsheet = async (
   file: File
@@ -165,9 +166,9 @@ const parseStudentSpreadsheet = async (
         throw new Error(`Row ${index + 2} has an invalid grade: ${gradeText}.`);
       }
     }
-    if (!/^(male|female)$/i.test(gender)) {
+    if (!validGenderPattern.test(gender)) {
       throw new Error(
-        `Row ${index + 2} has an invalid gender: ${gender}. Use Male or Female.`
+        `Row ${index + 2} has an invalid gender: ${gender}. Use Male, Female, or Prefer not to Disclose.`
       );
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -473,7 +474,11 @@ export default function Students() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="">
-              <DropdownMenuItem onClick={() => setIsImportOpen(true)}>
+              <DropdownMenuItem
+                onClick={() => {
+                  setIsImportOpen(true);
+                }}
+              >
                 Upload XLSX
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setIsAddByManualOpen(true)}>
@@ -526,7 +531,7 @@ export default function Students() {
                     : "cursor-pointer hover:bg-accent"
                 }`}
               >
-                <span className="font-medium">Choose file </span>
+                <span className="font-medium">Choose file | </span>
                 <span
                   className={`ml-2 truncate ${
                     selectedFileName
