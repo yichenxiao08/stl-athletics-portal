@@ -83,7 +83,6 @@ const spreadsheetLayouts = [
 ];
 
 const validNamePattern = /^[\p{L}][\p{L} .'-]*$/u;
-const validGenderPattern = /^(male|female|prefer\s+not\s+to\s+disclose)$/i;
 
 const parseStudentSpreadsheet = async (
   file: File
@@ -165,11 +164,6 @@ const parseStudentSpreadsheet = async (
       ) {
         throw new Error(`Row ${index + 2} has an invalid grade: ${gradeText}.`);
       }
-    }
-    if (!validGenderPattern.test(gender)) {
-      throw new Error(
-        `Row ${index + 2} has an invalid gender: ${gender}. Use Male, Female, or Prefer not to Disclose.`
-      );
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       throw new Error(`Row ${index + 2} has an invalid email: ${email}.`);

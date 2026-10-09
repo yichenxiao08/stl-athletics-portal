@@ -49,7 +49,9 @@ const nameVariants = (name: string) => {
 
 const parseGraduationYear = (email: string) => {
   const localPart = email.split("@")[0] ?? "";
-  const match = /(\d{4}|\d{2})$/.exec(localPart);
+  // The optional trailing digits distinguish students with the same name and
+  // graduation year, e.g. first.last281 means grad year 2028, student 1.
+  const match = /(\d{4}|\d{2})(?:\d+)?$/.exec(localPart);
   if (!match) return undefined;
 
   const parsedYear = Number(match[1]);
@@ -114,20 +116,22 @@ export const importStudents = async (
     const name = `${row.lastName}, ${row.firstName}`;
     const email = row.email.trim().toLowerCase();
     const parsedGraduationYear = parseGraduationYear(email);
-    const grad =
-      parsedGraduationYear ??
-      (row.grade === undefined
+    const calculatedGrade =
+      parsedGraduationYear === undefined
         ? undefined
-        : fallbackGraduationYear(row.grade, schoolYear));
-    const grade =
+        : gradeForSchoolYear(parsedGraduationYear, schoolYear);
+    const usableParsedGraduationYear =
+      parsedGraduationYear !== undefined &&
+      calculatedGrade !== undefined &&
+      calculatedGrade >= 9 &&
+      calculatedGrade <= 12
+        ? parsedGraduationYear
+        : undefined;
+    const importedGrade =
       row.grade ??
-      (grad === undefined ? undefined : gradeForSchoolYear(grad, schoolYear));
-
-    if (grad === undefined || grade === undefined || grade < 9 || grade > 12) {
-      throw new Error(
-        `Unable to calculate a valid grade for ${name}. The email must contain a valid graduation year.`
-      );
-    }
+      (usableParsedGraduationYear === undefined
+        ? undefined
+        : calculatedGrade);
 
     const importedName = normalizeName(name);
     const importedKey = `${email}|${importedName}`;
@@ -151,19 +155,30 @@ export const importStudents = async (
         getStudentGraduationYear(existingStudent.email, existingStudent.grad),
         schoolYear
       );
+      const values: { grade?: number; gender?: string; active?: boolean } = {
+        gender: row.gender,
+        active,
+      };
+      if (importedGrade !== undefined) {
+        values.grade = importedGrade;
+      }
       if (
-        existingStudent.grade !== grade ||
+        (importedGrade !== undefined && existingStudent.grade !== importedGrade) ||
         existingStudent.gender !== row.gender ||
         existingStudent.active !== active
       ) {
         updates.push({
           id: existingStudent.id,
-          values: { grade, gender: row.gender, active },
+          values,
         });
         updatedCount += 1;
       }
       continue;
     }
+
+    const grade = importedGrade ?? 9;
+    const grad =
+      usableParsedGraduationYear ?? fallbackGraduationYear(grade, schoolYear);
 
     inserts.push({
       name,
