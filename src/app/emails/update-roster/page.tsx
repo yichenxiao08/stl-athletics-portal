@@ -15,15 +15,16 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2 } from "lucide-react";
+import { useSchoolYear } from "@/lib/school-year-context";
 
 export default function EmailPage() {
+  const { selectedYear } = useSchoolYear();
   const [message, setMessage] = useState(
     "Hello, please follow the link below to update the roster for your team. "
   );
   const [season, setSeason] = useState("All");
   const [selectedTeams, setSelectedTeams] = useState<Team[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
-  const [teamsBySeason, setTeamsBySeason] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -34,7 +35,6 @@ export default function EmailPage() {
         const data = await selectData();
         if (data) {
           setTeams(data);
-          setTeamsBySeason(data)
         }
       } catch {
         setFetchError("Failed to load teams. Please try again.");
@@ -51,13 +51,17 @@ export default function EmailPage() {
     );
   };
 
-  useEffect(() => {
-    const visibleIds = filteredTeams.map((t) => t.id.toString());
-    setSelectedTeams((prev) => prev.filter((team) => visibleIds.includes(team.id.toString())));
-  }, [season, teams]);
+  const filteredTeams = teams.filter(
+    (t) =>
+      t.year === selectedYear &&
+      (season === "All" || t.season === season)
+  );
 
-  const filteredTeams =
-    season === "All" ? teams : teams.filter((t) => t.season === season);
+  // Drop any selected teams that are no longer visible
+  useEffect(() => {
+    const visibleIds = new Set(filteredTeams.map((t) => t.id));
+    setSelectedTeams((prev) => prev.filter((team) => visibleIds.has(team.id)));
+  }, [season, selectedYear, teams]);
 
   async function loopTeams() {
     setActionError(null);
@@ -131,10 +135,7 @@ export default function EmailPage() {
           <div>
             Select season: 
           </div>
-          <Select value={season} onValueChange={(season) => {
-            setSeason(season);
-            setTeamsBySeason(season === "All" ? teams : teams.filter((team) => team.season === season))
-          }}>
+          <Select value={season} onValueChange={setSeason}>
             <SelectTrigger className="w-auto">
               <SelectValue placeholder="Select season" />
             </SelectTrigger>
@@ -152,7 +153,7 @@ export default function EmailPage() {
         )}
 
         <DataTable
-          columns={columns(toggleTeam, selectedTeams, setSelectedTeams, teamsBySeason)}
+          columns={columns(toggleTeam, selectedTeams, setSelectedTeams, filteredTeams)}
           data={filteredTeams}
           isLoading={loading}
         />

@@ -5,6 +5,14 @@ import { ColumnDef } from "@tanstack/react-table";
 import {Team} from "@/app/teams/columns";
 import { ArrowUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+const seasonOrder = ["Fall", "Winter", "Spring"];
+
+const seasonRank = (season?: string) => {
+  const index = seasonOrder.indexOf(season ?? "");
+  return index === -1 ? seasonOrder.length : index;
+};
+
 export const columns = (
   toggleTeam: (team: Team) => void,
   selectedTeams: Team[],
@@ -12,12 +20,17 @@ export const columns = (
   allTeams: Team[],
 ): ColumnDef<Team>[] => [
   {
-    accessorKey: "sport",
+    id: "sport",
+    accessorFn: (team) =>
+      `${team.sport?.name ?? ""} ${team.grade} ${team.gender}`,
+    sortingFn: "alphanumeric",
     header: ({ column }) => {
       return (
         <Button
           variant="ghost"
-          onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          onClick={() =>
+            column.toggleSorting(column.getIsSorted() === "asc", true)
+          }
         >
           Team Name
           <ArrowUpDown className="ml-2 h-4 w-4" />
@@ -35,6 +48,13 @@ export const columns = (
     ),
   },
   {
+    id: "season",
+    accessorFn: (team) => team.season,
+    header: "Season",
+    sortingFn: (a, b) =>
+      seasonRank(a.original.season) - seasonRank(b.original.season),
+  },
+  {
     accessorKey: "teachers",
     header: "Emails",
     cell: ({ row }) => (
@@ -47,9 +67,10 @@ export const columns = (
   {
     id: "select",
     header: ({ table }) => {
-      const allSelected = table
-        .getRowModel()
-        .rows.every((row) => selectedTeams.includes(row.original));
+      const rows = table.getRowModel().rows;
+      const allSelected =
+        rows.length > 0 &&
+        rows.every((row) => selectedTeams.includes(row.original));
 
       return (
         <div className="flex items-center justify-end gap-3 text-right pr-4">
@@ -57,9 +78,6 @@ export const columns = (
           <Checkbox
             checked={allSelected}
             onCheckedChange={() => {
-              const ids = table
-                .getRowModel()
-                .rows.map((row) => row.original.id.toString());
               if (allSelected) {
                 // Uncheck all
                 setSelectedTeams([]);
