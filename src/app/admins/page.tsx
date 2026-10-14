@@ -10,12 +10,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Pencil } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Pencil, Loader2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useEffect, useState } from "react";
 import { LoginForm } from "@/components/login-form";
 
 type Admin = {
+  id: string;
   email: string;
 };
 
@@ -24,6 +32,9 @@ export default function AdminsPage() {
   const [loading, setLoading] = useState(true);
   const [showLoginForm, setShowLoginForm] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [adminToRemove, setAdminToRemove] = useState<Admin | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   useEffect(() => {
     const loadAdmins = async () => {
@@ -31,7 +42,8 @@ export default function AdminsPage() {
         const supabase = createClient();
         const { data, error } = await supabase
           .from("profiles")
-          .select("email")
+          .select("id, email")
+          .eq("pending_deletion", false)
           .range(0, 5000);
 
         if (error) {
@@ -39,12 +51,11 @@ export default function AdminsPage() {
           return;
         }
 
-        const emails = (data ?? [])
-          .map((row) => row.email)
-          .filter((email): email is string => !!email)
-          .map((email) => ({ email }));
+        const rows = (data ?? [])
+          .filter((row) => !!row.email)
+          .map((row) => ({ id: row.id as string, email: row.email as string }));
 
-        setAdmins(emails);
+        setAdmins(rows);
       } finally {
         setLoading(false);
       }
@@ -52,6 +63,39 @@ export default function AdminsPage() {
 
     loadAdmins();
   }, []);
+
+  const closeRemoveDialog = () => {
+    if (isRemoving) return;
+    setAdminToRemove(null);
+    setRemoveError(null);
+  };
+
+  const handleRemove = async () => {
+    if (!adminToRemove) return;
+
+    setRemoveError(null);
+    setIsRemoving(true);
+    try {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("profiles")
+        .update({ pending_deletion: true })
+        .eq("id", adminToRemove.id)
+        .select("id");
+
+      if (error || !data || data.length === 0) {
+        setRemoveError("Failed to remove admin. Check the update policy.");
+        return;
+      }
+
+      setAdmins((prev) => prev.filter((a) => a.id !== adminToRemove.id));
+      setAdminToRemove(null);
+    } catch {
+      setRemoveError("Failed to remove admin. Please try again.");
+    } finally {
+      setIsRemoving(false);
+    }
+  };
 
   return (
     <>
@@ -80,7 +124,7 @@ export default function AdminsPage() {
                 <TableRow>
                   <TableHead className="px-4 py-2">Email</TableHead>
                   <TableHead className="px-4 py-2 w-12 text-right">
-                    Edit(Temp)
+                    Edit
                   </TableHead>
                 </TableRow>
               </TableHeader>
@@ -93,10 +137,14 @@ export default function AdminsPage() {
                   </TableRow>
                 ) : admins.length ? (
                   admins.map((admin) => (
-                    <TableRow key={admin.email}>
+                    <TableRow key={admin.id}>
                       <TableCell className="px-4">{admin.email}</TableCell>
                       <TableCell className="px-2 text-right">
-                        <Button variant="link" size="icon">
+                        <Button
+                          variant="link"
+                          size="icon"
+                          onClick={() => setAdminToRemove(admin)}
+                        >
                           <Pencil className="h-4 w-4" />
                         </Button>
                       </TableCell>
@@ -114,6 +162,53 @@ export default function AdminsPage() {
           </div>
         </div>
       </div>
+
+      <Dialog
+        open={adminToRemove !== null}
+        onOpenChange={(open) => {
+          if (!open) closeRemoveDialog();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove admin</DialogTitle>
+            <DialogDescription>
+              <span className="font-semibold text-foreground">
+                {adminToRemove?.email}
+              </span>{" "}
+              will be flagged for deletion.
+            </DialogDescription>
+          </DialogHeader>
+          {/* <p className="text-xl font-extrabold text-red-600">
+            Their login still works until you delete them in Supabase.
+          </p> */}
+          {removeError && (
+            <p className="text-sm text-destructive">{removeError}</p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={closeRemoveDialog}
+              disabled={isRemoving}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleRemove}
+              disabled={isRemoving}
+            >
+              {isRemoving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                "Remove from list"
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
