@@ -53,6 +53,33 @@ export async function markAsUnpaid({
   return (players ?? []) as Player[];
 }
 
+// Read actual payment rows for the team's year instead of the all-years
+// finance view, which can carry a previous year's payment forward.
+export async function getTeamPayments(teamId: number): Promise<Finance[]> {
+  const supabase = createClient();
+  const { data: team, error: teamError } = await supabase
+    .from("teams")
+    .select("year")
+    .eq("id", teamId)
+    .single();
+  if (teamError) throw new Error(teamError.message);
+
+  const { data, error } = await supabase
+    .from("players")
+    .select("student_id, team_id, teams!inner(year)")
+    .eq("paid", true)
+    .eq("teams.year", team.year)
+    .order("id", { ascending: true });
+  if (error) throw new Error(error.message);
+
+  return (data ?? []).map((payment) => ({
+    student_id: payment.student_id,
+    name: "",
+    paid_to_team: payment.team_id,
+    year: team.year,
+  }));
+}
+
 export async function getFinances() {
   const supabase = createClient();
   const { data, error } = await supabase.from("finances").select();

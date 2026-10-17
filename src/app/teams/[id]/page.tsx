@@ -71,7 +71,7 @@ import { selectData as selectStudents } from "@/app/functions/students";
 import { Input } from "@/components/ui/input";
 import { useSchoolYear } from "@/lib/school-year-context";
 import {
-  getFinances,
+  getTeamPayments,
   markManagerAsPaid,
   markManagerAsUnpaid,
 } from "@/app/functions/finances";
@@ -163,7 +163,7 @@ export default function TeamPage({
   const router = useRouter();
   const getPayments = async () => {
     try {
-      const financesResult = await getFinances();
+      const financesResult = await getTeamPayments(teamId);
       if (financesResult) {
         setFinances(financesResult);
       }
@@ -241,7 +241,7 @@ export default function TeamPage({
           selectTeamPlayers(teamId),
           selectStudents(),
           selectTeamManagers(teamId),
-          getFinances(),
+          getTeamPayments(teamId),
         ]);
 
         if (teamsResult) setData(teamsResult);
